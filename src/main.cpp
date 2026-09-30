@@ -152,11 +152,22 @@ static void dump_screen(const Chip8& chip8) {
     std::cout << std::flush;
 }
 
+static void capture_screenshot(SDL_Renderer* renderer, int w, int h, const std::string& path) {
+    SDL_Surface* surface = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (surface) {
+        SDL_RenderReadPixels(renderer, NULL, SDL_PIXELFORMAT_ARGB8888, surface->pixels, surface->pitch);
+        SDL_SaveBMP(surface, path.c_str());
+        SDL_FreeSurface(surface);
+        std::cout << "[Screenshot] Captured: " << path << std::endl;
+    }
+}
+
 int main(int argc, char** argv) {
     bool headless = false;
     bool dump = false;
     bool disasm_mode = false;
     bool demo_mode = false;
+    bool screenshot_all = false;
     int cycles = 1000;
     std::string cli_rom_path = "";
 
@@ -171,6 +182,8 @@ int main(int argc, char** argv) {
             disasm_mode = true;
         } else if (arg == "--demo") {
             demo_mode = true;
+        } else if (arg == "--screenshot-all") {
+            screenshot_all = true;
         } else if (arg == "--cycles" && i + 1 < argc) {
             cycles = std::stoi(argv[++i]);
         } else if (arg.rfind("--", 0) != 0) {
@@ -255,6 +268,78 @@ int main(int argc, char** argv) {
 
     Chip8 chip8;
     UiRenderer ui_renderer;
+
+    if (screenshot_all) {
+        // 1. Launcher view
+        ctx.screen = ScreenMode::LAUNCHER;
+        ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        capture_screenshot(renderer, WIN_WIDTH, WIN_HEIGHT, "assets/screenshots/launcher.bmp");
+
+        // 2. Settings modal view
+        ctx.show_settings_modal = true;
+        ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        capture_screenshot(renderer, WIN_WIDTH, WIN_HEIGHT, "assets/screenshots/settings.bmp");
+        ctx.show_settings_modal = false;
+
+        // 3. Pong gameplay view
+        chip8.reset();
+        std::string pong_path = "roms/Pong.ch8";
+        if (!std::filesystem::exists(pong_path)) pong_path = "roms/games/Pong.ch8";
+        chip8.load_rom(pong_path);
+        ctx.screen = ScreenMode::GAMEPLAY;
+        for (size_t i = 0; i < ctx.roms.size(); i++) {
+            if (ctx.roms[i].title == "Pong") { ctx.selected_rom_index = (int)i; break; }
+        }
+        for (int f = 0; f < 80; f++) {
+            for (int c = 0; c < 20; c++) chip8.emulate_cycle();
+            chip8.update_timers();
+        }
+        ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        capture_screenshot(renderer, WIN_WIDTH, WIN_HEIGHT, "assets/screenshots/gameplay-pong.bmp");
+
+        // 4. Savestate notification view
+        chip8.save_state("savestate_slot1.c8s");
+        ctx.show_toast("State saved to Slot 1", 50, 255, 150);
+        ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        capture_screenshot(renderer, WIN_WIDTH, WIN_HEIGHT, "assets/screenshots/savestate.bmp");
+
+        // 5. Debugger panel view
+        ctx.show_debugger = true;
+        ctx.paused = true;
+        ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        capture_screenshot(renderer, WIN_WIDTH, WIN_HEIGHT, "assets/screenshots/debugger.bmp");
+        ctx.show_debugger = false;
+        ctx.paused = false;
+
+        // 6. Themes (Amber CRT) view
+        ctx.config.palette = 1; // Amber CRT
+        ctx.show_toast("Theme: Amber CRT", 255, 176, 0);
+        ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        capture_screenshot(renderer, WIN_WIDTH, WIN_HEIGHT, "assets/screenshots/themes.bmp");
+
+        // 7. Tetris gameplay view (Neon Cyberpunk)
+        chip8.reset();
+        std::string tetris_path = "roms/Tetris.ch8";
+        if (!std::filesystem::exists(tetris_path)) tetris_path = "roms/games/Tetris.ch8";
+        chip8.load_rom(tetris_path);
+        ctx.config.palette = 2; // Neon Cyberpunk
+        for (size_t i = 0; i < ctx.roms.size(); i++) {
+            if (ctx.roms[i].title == "Tetris") { ctx.selected_rom_index = (int)i; break; }
+        }
+        for (int f = 0; f < 100; f++) {
+            for (int c = 0; c < 15; c++) chip8.emulate_cycle();
+            chip8.update_timers();
+        }
+        ctx.show_toast("Theme: Neon Cyberpunk", 0, 255, 240);
+        ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        capture_screenshot(renderer, WIN_WIDTH, WIN_HEIGHT, "assets/screenshots/gameplay-tetris.bmp");
+
+        std::cout << "All screenshots captured successfully." << std::endl;
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 0;
+    }
 
     // Direct ROM launch from command line
     if (!cli_rom_path.empty()) {
@@ -536,6 +621,7 @@ int main(int argc, char** argv) {
 
         // Render Frame
         ui_renderer.render(renderer, ctx, chip8, WIN_WIDTH, WIN_HEIGHT);
+        SDL_RenderPresent(renderer);
 
         // Frame rate limiter (60 FPS)
         Uint32 elapsed = SDL_GetTicks() - frame_start;
