@@ -33,6 +33,8 @@ void Chip8::initialise(){
     opcode = 0;
     index = 0;
     sp = 0;
+    last_opcode = 0;
+    last_pc = 0x200;
 
     memset(display, 0, sizeof(display));
     memset(stack, 0, sizeof(stack));
@@ -50,12 +52,12 @@ void Chip8::load_fonts(){
     for(int i=0; i<80; i++) memory[i] = chip8_fontset[i];
 }
 
-void Chip8::load_rom(const std::string& filename){
+bool Chip8::load_rom(const std::string& filename){
     std::ifstream file(filename, std::ios::binary | std::ios::ate);
 
     if(!file.is_open()){
         std::cerr << "Failed to open ROM: " << filename << std::endl;
-        return;
+        return false;
     }
 
     std::streamsize size = file.tellg();
@@ -63,17 +65,20 @@ void Chip8::load_rom(const std::string& filename){
 
     if(size > (4096-512)){ // 512 reserved for fonts/interpreter
         std::cerr << "ROM too large to fit in memory" << std::endl;
-        return;
+        return false;
     }
 
     file.read((char*)(memory+512),size);
     file.close();
 
     std::cout << "Loaded ROM: " << filename << std::endl;
+    return true;
 }
 
 void Chip8::emulate_cycle(){
-    opcode = memory[pc] << 8 | memory[pc+1]; // 16-bit instruction
+    last_pc = pc;
+    opcode = (memory[pc & 0xFFF] << 8) | memory[(pc + 1) & 0xFFF]; // 16-bit instruction
+    last_opcode = opcode;
 
     switch(opcode & 0xF000){ // Gets only the first 4 bits
         case 0x0000:
@@ -84,8 +89,12 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 case 0x00EE: // Returns from subroutine
-                    pc = stack[sp];
+                    if(sp == 0){
+                        std::cerr << "Stack underflow" << std::endl;
+                        break;
+                    }
                     sp--;
+                    pc = stack[sp];
                     pc += 2;
                     break;
                 default:
@@ -97,6 +106,10 @@ void Chip8::emulate_cycle(){
             pc = opcode & 0x0FFF;
             break;
         case 0x2000: // 2XXX = Call subroutine at XXX
+            if(sp >= 16){
+                std::cerr << "Stack overflow" << std::endl;
+                break;
+            }
             stack[sp] = pc;
             sp++;
             pc = opcode & 0x0FFF;
@@ -141,31 +154,40 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 case 0x0004:{ // v[x] += v[y], v[F] = carry
-                    uint16_t sum = v[(opcode & 0x0F00) >> 8] + v[(opcode & 0x00F0) >> 4];
-                    v[0xF] = (sum > 0xFF) ? 1: 0;   
-                    v[(opcode & 0x0F00) >> 8] = sum & 0xFF;   
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8], vy = v[(opcode & 0x00F0) >> 4];
+                    uint16_t sum = vx + vy;
+                    v[(opcode & 0x0F00) >> 8] = sum & 0xFF;
+                    v[0xF] = (sum > 0xFF) ? 1 : 0;   // flag written LAST so it wins when x == F
                     pc += 2;          
                 }
                     break;
-                case 0x0005: // v[x] -= v[y], v[F] = NOT(borrow)
-                    v[0xF] = (v[(opcode & 0x0F00) >> 8] > v[(opcode & 0x00F0) >> 4]) ? 1 : 0;
-                    v[(opcode & 0x0F00) >> 8] -= v[(opcode & 0x00F0) >> 4];
+                case 0x0005:{ // v[x] -= v[y], v[F] = NOT(borrow)
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8], vy = v[(opcode & 0x00F0) >> 4];
+                    v[(opcode & 0x0F00) >> 8] = vx - vy;
+                    v[0xF] = (vx >= vy) ? 1 : 0;     // CHIP-8 spec: VF = 1 when Vx >= Vy (no borrow)
                     pc += 2;
+                }
                     break;
-                case 0x0006: // v[x] >>= 1, v[F] = LSB
-                    v[0xF] = v[(opcode & 0x0F00) >> 8] & 0x1;
-                    v[(opcode & 0x0F00) >> 8] >>= 1;
+                case 0x0006:{ // v[x] >>= 1, v[F] = LSB
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    v[(opcode & 0x0F00) >> 8] = vx >> 1;
+                    v[0xF] = vx & 0x1;
                     pc += 2;
+                }
                     break;
-                case 0x0007: // v[x] = v[y] - v[x], v[F] = NOT(borrow)
-                    v[0xF] = (v[(opcode & 0x00F0) >> 4] > v[(opcode & 0x0F00) >> 8]) ? 1 : 0;
-                    v[(opcode & 0x0F00) >> 8] = v[(opcode & 0x00F0) >> 4] - v[(opcode & 0x0F00) >> 8];
+                case 0x0007:{ // v[x] = v[y] - v[x], v[F] = NOT(borrow)
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8], vy = v[(opcode & 0x00F0) >> 4];
+                    v[(opcode & 0x0F00) >> 8] = vy - vx;
+                    v[0xF] = (vy >= vx) ? 1 : 0;
                     pc += 2;
+                }
                     break;
-                case 0x000E: // v[x] <<= 1, v[F] = MSB
-                    v[0xF] = v[(opcode & 0x0F00) >> 8] >> 7;  // Save MSB
-                    v[(opcode & 0x0F00) >> 8] <<= 1;
+                case 0x000E:{ // v[x] <<= 1, v[F] = MSB
+                    uint8_t vx = v[(opcode & 0x0F00) >> 8];
+                    v[(opcode & 0x0F00) >> 8] = vx << 1;
+                    v[0xF] = (vx >> 7) & 0x1;
                     pc += 2;
+                }
                     break;
                 default:
                     std::cerr << "Unknown opcode: 0x" << std::hex << opcode << std::endl;
@@ -201,7 +223,7 @@ void Chip8::emulate_cycle(){
             v[0xF] = 0; // Resetting collision flag
             // Looping through each row of the sprite
             for(int y_line=0; y_line<height; y_line++){
-                pixel = memory[index + y_line]; // One row of sprite data
+                pixel = memory[(index + y_line) & 0xFFF]; // One row of sprite data
                 // Now looping through each pixel in the row (8)
                 for(int x_line=0; x_line<8; x_line++){
                     // Check if current pixel is 1
@@ -225,11 +247,11 @@ void Chip8::emulate_cycle(){
         case 0xE000: 
             switch(opcode & 0x00FF){
                 case 0x009E: // EX9E = skip next instr. if key[v[x]] is pressed
-                    if(key[v[(opcode & 0x0F00) >> 8]] != 0) pc += 4;
+                    if(key[v[(opcode & 0x0F00) >> 8] & 0xF] != 0) pc += 4;
                     else pc += 2;
                     break;
                 case 0x00A1: // EXA1 = skip next instr. if key[v[x]] is not pressed
-                    if(key[v[(opcode & 0x0F00) >> 8]] == 0) pc += 4;
+                    if(key[v[(opcode & 0x0F00) >> 8] & 0xF] == 0) pc += 4;
                     else pc += 2;
                     break;
                 default:
@@ -252,7 +274,7 @@ void Chip8::emulate_cycle(){
                             break;
                         }
                     }
-                    pc += 2;
+                    if(key_pressed) pc += 2;
                 }
                     break;
                 case 0x0015: // FX15 - delay_timer = v[x]
@@ -268,26 +290,26 @@ void Chip8::emulate_cycle(){
                     pc += 2;
                     break;
                 case 0x0029: // FX29 - index = location of sprite for digit v[x]
-                    index = v[(opcode & 0x0F00) >> 8] * 5;
+                    index = (v[(opcode & 0x0F00) >> 8] & 0xF) * 5;
                     pc += 2;
                     break;
                 case 0x0033:{ // FX33 - store BCD representation of v[x] at index
                     uint8_t value = v[(opcode & 0x0F00) >> 8];
-                    memory[index] = value/100;
-                    memory[index+1] = value/10;
-                    memory[index+2] = value%10;
+                    memory[index & 0xFFF] = value/100;
+                    memory[(index+1) & 0xFFF] = (value/10) % 10;
+                    memory[(index+2) & 0xFFF] = value%10;
                     pc += 2;
                 }
                     break;
                 case 0x0055: // FX55 - store v[0] to v[x] in memory starting from index
-                    for(int i=0; i<((opcode & 0x0F00) >> 8); i++){
-                        memory[index+i] = v[i];
+                    for(int i=0; i<=((opcode & 0x0F00) >> 8); i++){
+                        memory[(index+i) & 0xFFF] = v[i];
                     }
                     pc += 2;
                     break;
                 case 0x0065: // FX65 - Fill v[0] to v[x] from memory starting at index
-                    for(int i=0; i<((opcode & 0x0F00) >> 8); i++){
-                        v[i] = memory[index+i];
+                    for(int i=0; i<=((opcode & 0x0F00) >> 8); i++){
+                        v[i] = memory[(index+i) & 0xFFF];
                     }
                     pc += 2;
                     break;
@@ -301,10 +323,67 @@ void Chip8::emulate_cycle(){
             pc += 2;
             break;
     }
-    // We now update the timers
+}
+
+// Timers tick at 60 Hz, independent of CPU speed. main() calls this once per frame.
+void Chip8::update_timers(){
     if(delay_timer > 0) delay_timer--;
-    if(sound_timer > 0){
-        if(sound_timer == 1) std::cout << "BEEP!" << std::endl;
-        sound_timer--;
-    }
+    if(sound_timer > 0) sound_timer--;
+}
+
+// ---------------- Savestates ----------------
+// File layout: magic "CH8S" | u32 version | memory | V | I | PC | SP | stack | timers | display | key
+static const char STATE_MAGIC[4] = {'C','H','8','S'};
+static const uint32_t STATE_VERSION = 1;
+
+template<typename T> static void put(std::ofstream& f, const T& v){ f.write((const char*)&v, sizeof(T)); }
+template<typename T> static bool get(std::ifstream& f, T& v){ f.read((char*)&v, sizeof(T)); return (bool)f; }
+
+bool Chip8::save_state(const std::string& filename) const {
+    std::ofstream f(filename, std::ios::binary | std::ios::trunc);
+    if(!f.is_open()) return false;
+    f.write(STATE_MAGIC, 4);
+    put(f, STATE_VERSION);
+    f.write((const char*)memory, sizeof(memory));
+    f.write((const char*)v, sizeof(v));
+    put(f, index); put(f, pc); put(f, sp);
+    f.write((const char*)stack, sizeof(stack));
+    put(f, delay_timer); put(f, sound_timer);
+    f.write((const char*)display, sizeof(display));
+    f.write((const char*)key, sizeof(key));
+    return (bool)f;
+}
+
+bool Chip8::load_state(const std::string& filename){
+    std::ifstream f(filename, std::ios::binary);
+    if(!f.is_open()) return false;
+
+    char magic[4]; uint32_t version = 0;
+    f.read(magic, 4);
+    if(!f || std::memcmp(magic, STATE_MAGIC, 4) != 0) return false;
+    if(!get(f, version) || version != STATE_VERSION) return false;
+
+    // Read into temporaries first so a truncated/corrupt file can never corrupt live state.
+    uint8_t  n_mem[4096], n_v[16], n_disp[64*32], n_key[16];
+    uint16_t n_stack[16], n_index, n_pc;
+    uint8_t  n_sp, n_dt, n_st;
+    f.read((char*)n_mem, sizeof(n_mem));
+    f.read((char*)n_v, sizeof(n_v));
+    if(!get(f, n_index) || !get(f, n_pc) || !get(f, n_sp)) return false;
+    f.read((char*)n_stack, sizeof(n_stack));
+    if(!get(f, n_dt) || !get(f, n_st)) return false;
+    f.read((char*)n_disp, sizeof(n_disp));
+    f.read((char*)n_key, sizeof(n_key));
+    if(!f) return false;
+    if(n_sp > 16 || n_pc >= 4096 || n_index >= 4096) return false; // validation check
+
+    std::memcpy(memory, n_mem, sizeof(memory));
+    std::memcpy(v, n_v, sizeof(v));
+    std::memcpy(stack, n_stack, sizeof(stack));
+    std::memcpy(display, n_disp, sizeof(display));
+    std::memcpy(key, n_key, sizeof(key));
+    index = n_index; pc = n_pc; sp = n_sp;
+    delay_timer = n_dt; sound_timer = n_st;
+    draw_flag = true;
+    return true;
 }

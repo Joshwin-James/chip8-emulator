@@ -69,18 +69,62 @@ make
 ```
 
 ## Usage
+
 ```bash
-./chip8 <path-to-rom-file>
+# Run emulator with a ROM (default 10x scale):
+./chip8 roms/Pong.ch8
+
+# Run in recording-friendly demo mode (20x scale, HUD active, 5-sec cheat-sheet):
+./chip8 roms/Pong.ch8 --demo
+
+# Run with custom window scale:
+./chip8 roms/Tetris.ch8 --scale 15
+
+# Run ROM browser (interactive menu):
+./chip8
+# or:
+./chip8 roms/
+
+# Disassemble a ROM file:
+./chip8 --disasm roms/Pong.ch8
+
+# Run headless test with ASCII screen dump:
+./chip8 roms/tests/1-chip8-logo.ch8 --headless --cycles 1000 --dump-screen
 ```
 
-**Example:**
-```bash
-./chip8 roms/PONG.ch8
-```
+### Command-Line Flags
 
-## Keyboard Mapping
+| Flag | Argument | Description |
+| :--- | :--- | :--- |
+| `--demo` | None | Enables demo/recording mode: HUD on, 20× scale (1280×640), 5-second controls cheat-sheet |
+| `--scale` | `N` | Sets custom window scaling factor ($64N \times 32N$ pixels) |
+| `--headless` | None | Runs without SDL window/audio initialization (pure CPU emulation) |
+| `--cycles` | `N` | Number of CPU cycles to execute in headless mode (default: 1000) |
+| `--dump-screen`| None | Prints the 64×32 display buffer as ASCII text upon completion |
+| `--disasm` | None | Disassembles the specified ROM into hex addresses, opcodes, and mnemonics |
 
-The original Chip-8 keypad is mapped to keyboard keys:
+## Controls
+
+### Emulator Hotkeys
+
+| Key / Shortcut | Action | Description |
+| :--- | :--- | :--- |
+| `ESC` | Quit | Closes the emulator |
+| `H` | Toggle HUD | Shows/hides on-screen overlay (ROM, speed, palette, slot, last opcode) |
+| `Up` / `+` / `=` | Speed Up | Increases CPU cycles executed per frame (1..200) |
+| `Down` / `-` | Speed Down | Decreases CPU cycles executed per frame |
+| `Backspace` | Reset Speed | Restores default emulation speed (10 cycles/frame) |
+| `C` / `Tab` | Cycle Palette | Cycles through Classic Green, Amber CRT, Neon, and Monochrome |
+| `Space` / `P` | Pause / Resume | Freezes/unfreezes CPU and timer execution |
+| `N` | Single Step | While paused, executes exactly 1 cycle and prints instruction |
+| `F1` – `F4` | Select Slot | Selects Savestate Slot 1, 2, 3, or 4 |
+| `F5` | Quick Save | Saves state to active slot (`savestate_slotN.c8s`) |
+| `F9` | Quick Load | Restores state from active slot (`savestate_slotN.c8s`) |
+
+### Hex Keypad Mapping
+
+The standard Chip-8 16-key keypad maps to the QWERTY keyboard:
+
 ```
 Chip-8 Keypad:          QWERTY Keyboard:
 ┌─┬─┬─┬─┐               ┌─┬─┬─┬─┐
@@ -94,10 +138,6 @@ Chip-8 Keypad:          QWERTY Keyboard:
 └─┴─┴─┴─┘               └─┴─┴─┴─┘
 ```
 
-**Controls:**
-- `ESC` - Quit emulator
-- Keyboard keys as mapped above
-
 ### Game-Specific Controls
 
 **PONG:**
@@ -109,6 +149,18 @@ Chip-8 Keypad:          QWERTY Keyboard:
 - `W` - Drop
 - `E` - Move right
 - `A` - Move left
+
+## Testing & Headless Mode
+
+Run headless tests without launching SDL:
+```bash
+./chip8 roms/tests/1-chip8-logo.ch8 --headless --cycles 1000 --dump-screen
+```
+
+Run the automated CPU core unit test suite:
+```bash
+make test
+```
 
 ## Implementation Details
 
